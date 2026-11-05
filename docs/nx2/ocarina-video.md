@@ -54,7 +54,57 @@ zeros its tail and returns only the requested writable span. Descriptor ranges r
 This fixes that physical allocation boundary; cached and null-buffer paths are not covered.
 The additional ring occupancy and zeroing require fresh performance validation.
 
+A later scene test exposed the same declaration-size requirement on cached buffers: a 64 KiB
+allocation bound at offset 19200 left 46336 bytes for a 65536-byte declaration. MoltenVK cache
+buffers now allocate and clear an additional 64 KiB beyond their logical guest extent. Buffer
+cache ranges and copies retain their original sizes. The fallback null buffer also has uniform,
+storage and texel usages, a nonzero descriptor range, and a 64 KiB allocation on MoltenVK.
+
 The earlier MoltenVK 1.4.1 GUI and fixed-window CLI tests separately lost their Vulkan device
 near the first scene load (roughly 212–214 seconds). The allocation diagnostic alone does not
 establish that device loss's cause. Tests must distinguish the video improvement, this validation
 failure, and successful gameplay rendering.
+
+## Additional macOS validation fixes
+
+The captured gameplay fragment program needs 17 samplers. MoltenVK push descriptors lower to
+Metal's 16-slot direct sampler interface. Following the workaround described in
+[Eden issue #495](https://github.com/eden-emulator/Issue-Reports/issues/495), affected pipeline
+layouts use ordinary sets; other pipelines retain push descriptors. The tested SDK driver
+advertises 16 ordinary samplers but 500000 update-after-bind samplers, so the affected layout
+and its sampler bindings use update-after-bind, with separately flagged descriptor pool banks.
+The queried sampled-image feature is preserved only on MoltenVK. Descriptor-buffer selection is
+excluded for that layout. Guest descriptor-set lifetime/reuse ordering remains unchanged.
+
+A fresh MoltenVK driver cache was necessary after changing layouts: the existing cache continued
+returning the previously generated direct-binding shader. A new MoltenVK driver-cache filename
+keeps the guest shader/environment cache and the old driver cache intact.
+
+Khronos validation additionally identified missing `VK_KHR_portability_subset` enablement and
+an attachmentless framebuffer requesting 32768x32768 against device limits of 16384x16384.
+The advertised portability extension and its queried features are now enabled. Framebuffer
+extent selection starts from the device's maximum extent, then retains the existing attachment
+and render-area clamps. These are validation corrections; reaching gameplay and measuring its
+performance remain separate acceptance checks.
+
+The screenshot path now keeps its capture frame as a renderer member, rather than destroying
+the image immediately after readback. `DrawToFrame` creates and resizes that frame, retaining
+its transfer-source usage and existing idle wait on resize. This avoided a Metal validation
+assertion on a temporary 640x360 BGRA8 capture target. Captures at 640x360 and 800x450 passed
+without capture-specific Vulkan or Metal validation errors. This diagnostic correction does
+not establish the lifetime of unrelated gameplay resources.
+
+The first scene also uses task/mesh programs. The tested release drivers do not expose the
+required features, so those pipelines are skipped. A separate local driver experiment uses
+[MoltenVK PR #2777](https://github.com/KhronosGroup/MoltenVK/pull/2777), pinned at
+`9525fe13719f02de71bbfc70233d9677d8e8adae`, with the existing task path exposed only by a local
+test switch. Upstream advertises taskless meshes; enabling the task feature is not conformance
+evidence. The image-view lifetime correction comes from
+[MoltenVK PR #2887](https://github.com/KhronosGroup/MoltenVK/pull/2887), pinned at
+`f2fa686edc71c93c44ca1d91b38354d9ddc5a919`. These driver changes are isolated under the test
+build directory and are not installed system-wide.
+
+That driver reached further into scene rendering, where validation caught the cached uniform
+boundary above and a null 1D view bound to 2D/3D shader declarations. Sampled null descriptors
+now use separate 1D, 2D/cube and 3D backing images, cleared to zero and transitioned to GENERAL.
+Scene rendering and gameplay performance still require validation after these corrections.

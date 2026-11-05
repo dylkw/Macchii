@@ -158,7 +158,8 @@ public:
 
     bool CanUseDescriptorBuffer() const noexcept {
         const auto& props = device->DescriptorBufferProperties();
-        if (requires_argument_buffers || !device->IsExtDescriptorBufferSupported() || bindings.empty() ||
+        if (requires_argument_buffers || !device->IsExtDescriptorBufferSupported() ||
+            bindings.empty() ||
             !props.combinedImageSamplerDescriptorSingleArray) {
             return false;
         }

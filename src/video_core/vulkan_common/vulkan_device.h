@@ -1089,6 +1089,11 @@ FN_MAX_LIMIT_LIST
         return properties.properties.limits.maxVertexInputBindings;
     }
 
+    VkExtent2D GetMaxFramebufferExtent() const {
+        return {properties.properties.limits.maxFramebufferWidth,
+                properties.properties.limits.maxFramebufferHeight};
+    }
+
     u32 GetMaxViewports() const {
         return properties.properties.limits.maxViewports;
     }

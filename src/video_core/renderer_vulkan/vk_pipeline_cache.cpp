@@ -1140,6 +1140,15 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline(
         if ((env.ShaderStage() == Shader::Stage::Task ||
              env.ShaderStage() == Shader::Stage::Mesh) &&
             !device.IsExtMeshShaderSupported()) {
+            if (std::getenv("EDEN_NX2_RENDER_TRACE")) {
+                static std::atomic<u32> logged{};
+                if (logged.fetch_add(1, std::memory_order_relaxed) < 32) {
+                    LOG_WARNING(Render_Vulkan,
+                                "Skipping pipeline {:016x}: stage {} shader {:016x} requires "
+                                "unsupported mesh shaders",
+                                hash, static_cast<u32>(env.ShaderStage()), key.unique_hashes[index]);
+                }
+            }
             return nullptr;
         }
 

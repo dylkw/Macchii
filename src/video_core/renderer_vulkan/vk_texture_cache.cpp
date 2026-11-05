@@ -4328,14 +4328,76 @@ ImageView::ImageView(TextureCacheRuntime& runtime, const VideoCommon::NullImageV
         return;
     }
 
-    // Handle fallback for devices without nullDescriptor
-    ImageInfo info{};
-    info.format = PixelFormat::A8B8G8R8_UNORM;
-
-    null_image = MakeImage(*device, runtime.memory_allocator, info, {});
-    image_handle = *null_image;
-    for (u32 i = 0; i < Shader::NUM_TEXTURE_TYPES; i++) {
-        image_views[i] = MakeView(VK_FORMAT_A8B8G8R8_UNORM_PACK32, VK_IMAGE_ASPECT_COLOR_BIT);
+    // A null sampled texture still has to match the shader's dimensionality.
+    const std::array image_types{ImageType::e1D, ImageType::e2D, ImageType::e3D};
+    runtime.scheduler.RequestOutsideRenderPassOperationContext();
+    for (size_t index = 0; index < image_types.size(); ++index) {
+        ImageInfo info{};
+        info.format = PixelFormat::A8B8G8R8_UNORM;
+        info.type = image_types[index];
+        info.resources.layers = index == 1 ? 6 : 1;
+        null_images[index] = MakeImage(*device, runtime.memory_allocator, info, {});
+        const VkImage handle = *null_images[index];
+        const VkImageSubresourceRange subresources{
+            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+            .baseMipLevel = 0,
+            .levelCount = 1,
+            .baseArrayLayer = 0,
+            .layerCount = static_cast<u32>(info.resources.layers),
+        };
+        runtime.scheduler.Record([handle, subresources](vk::CommandBuffer cmdbuf) {
+            const VkImageMemoryBarrier to_transfer{
+                .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                .srcAccessMask = 0,
+                .dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+                .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+                .newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .image = handle,
+                .subresourceRange = subresources,
+            };
+            auto to_general = to_transfer;
+            to_general.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            to_general.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+            to_general.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            to_general.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+            cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                   0, to_transfer);
+            cmdbuf.ClearColorImage(handle, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VkClearColorValue{},
+                                   subresources);
+            cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                                   0, to_general);
+        });
+    }
+    image_handle = *null_images[0];
+    for (u32 index = 0; index < Shader::NUM_TEXTURE_TYPES; ++index) {
+        const auto texture_type = static_cast<Shader::TextureType>(index);
+        if (texture_type == Shader::TextureType::Buffer) {
+            continue;
+        }
+        const auto view_type = ImageViewType(texture_type);
+        const size_t image_index = view_type == VK_IMAGE_VIEW_TYPE_1D ||
+                                          view_type == VK_IMAGE_VIEW_TYPE_1D_ARRAY
+                                      ? 0
+                                  : view_type == VK_IMAGE_VIEW_TYPE_3D ? 2 : 1;
+        image_views[index] = device->GetLogical().CreateImageView({
+            .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+            .image = *null_images[image_index],
+            .viewType = view_type,
+            .format = VK_FORMAT_A8B8G8R8_UNORM_PACK32,
+            .components = {},
+            .subresourceRange{
+                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                .baseMipLevel = 0,
+                .levelCount = 1,
+                .baseArrayLayer = 0,
+                .layerCount = view_type == VK_IMAGE_VIEW_TYPE_CUBE ||
+                                     view_type == VK_IMAGE_VIEW_TYPE_CUBE_ARRAY
+                                 ? 6U
+                                 : 1U,
+            },
+        });
     }
 }
 
@@ -4730,8 +4792,9 @@ void Framebuffer::CreateFramebuffer(TextureCacheRuntime& runtime,
     is_rescaled = is_rescaled_;
     const auto& resolution = runtime.resolution;
 
-    u32 width = (std::numeric_limits<u32>::max)();
-    u32 height = (std::numeric_limits<u32>::max)();
+    const auto max_extent = runtime.device.GetMaxFramebufferExtent();
+    u32 width = max_extent.width;
+    u32 height = max_extent.height;
     for (size_t index = 0; index < NUM_RT; ++index) {
         const ImageView* const color_buffer = color_buffers[index];
         if (!color_buffer) {

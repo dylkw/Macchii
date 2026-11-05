@@ -114,6 +114,8 @@ private:
     std::optional<TurboMode> turbo_mode;
 
     Frame applet_frame;
+    // Retain the capture target across submissions, as with applet capture.
+    Frame screenshot_frame{};
 };
 
 } // namespace Vulkan

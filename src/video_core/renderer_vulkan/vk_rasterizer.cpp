@@ -1686,6 +1686,13 @@ void RasterizerVulkan::WaitForIdle() {
         VK_PIPELINE_STAGE_TESSELLATION_EVALUATION_SHADER_BIT |
         VK_PIPELINE_STAGE_GEOMETRY_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT;
+    if (!device.IsGeometryShaderSupported()) {
+        flags &= ~VK_PIPELINE_STAGE_GEOMETRY_SHADER_BIT;
+    }
+    if (!device.IsTessellationSupported()) {
+        flags &= ~(VK_PIPELINE_STAGE_TESSELLATION_CONTROL_SHADER_BIT |
+                   VK_PIPELINE_STAGE_TESSELLATION_EVALUATION_SHADER_BIT);
+    }
     if (device.IsExtTransformFeedbackSupported()) {
         flags |= VK_PIPELINE_STAGE_TRANSFORM_FEEDBACK_BIT_EXT;
     }
@@ -1909,8 +1916,15 @@ bool RasterizerVulkan::HasDrawTransformFeedback() {
 bool RasterizerVulkan::AccelerateSurfaceCopy(const Tegra::Engines::Fermi2D::Surface& src,
                                              const Tegra::Engines::Fermi2D::Surface& dst,
                                              const Tegra::Engines::Fermi2D::Config& copy_config) {
-    std::scoped_lock lock{texture_cache.mutex};
-    return texture_cache.BlitImage(dst, src, copy_config);
+    bool copied;
+    {
+        std::scoped_lock lock{texture_cache.mutex};
+        copied = texture_cache.BlitImage(dst, src, copy_config);
+    }
+    if (copied) {
+        FlushWork();
+    }
+    return copied;
 }
 
 bool RasterizerVulkan::UsesNvidiaDlss() const {
