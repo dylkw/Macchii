@@ -92,8 +92,13 @@ void Layer::ConfigureDraw(const Device& device, PresentPushConstants* out_push_c
                           VkSampler sampler, size_t image_index,
                           const Tegra::FramebufferConfig& framebuffer,
                           const Layout::FramebufferLayout& layout) {
+    const bool trace = Common::DkbFrameTrace::Enabled();
+    const auto entered = trace ? std::chrono::steady_clock::now()
+                               : std::chrono::steady_clock::time_point{};
     const auto texture_info = rasterizer.AccelerateDisplay(
         framebuffer, framebuffer.address + framebuffer.offset, framebuffer.stride);
+    const auto accelerated = trace ? std::chrono::steady_clock::now()
+                                   : std::chrono::steady_clock::time_point{};
     const u32 texture_width = texture_info ? texture_info->width : framebuffer.width;
     const u32 texture_height = texture_info ? texture_info->height : framebuffer.height;
     const u32 scaled_width = texture_info ? texture_info->scaled_width : texture_width;
@@ -111,7 +116,11 @@ void Layer::ConfigureDraw(const Device& device, PresentPushConstants* out_push_c
 
     // Finish any pending renderpass
     scheduler.RequestOutsideRenderPassOperationContext();
+    const auto prepared = trace ? std::chrono::steady_clock::now()
+                                : std::chrono::steady_clock::time_point{};
     scheduler.Wait(resource_ticks[image_index]);
+    const auto waited = trace ? std::chrono::steady_clock::now()
+                              : std::chrono::steady_clock::time_point{};
     SCOPE_EXIT {
         resource_ticks[image_index] = scheduler.CurrentTick();
     };
@@ -119,6 +128,8 @@ void Layer::ConfigureDraw(const Device& device, PresentPushConstants* out_push_c
     if (!use_accelerated) {
         UpdateRawImage(framebuffer, image_index);
     }
+    const auto uploaded = trace ? std::chrono::steady_clock::now()
+                                : std::chrono::steady_clock::time_point{};
 
     VkImage source_image = texture_info ? texture_info->image : *raw_images[image_index];
     VkImageView source_image_view =
@@ -162,6 +173,21 @@ void Layer::ConfigureDraw(const Device& device, PresentPushConstants* out_push_c
 
     UpdateDescriptorSet(device, source_image_view, sampler, image_index);
     *out_descriptor_set = descriptor_sets[image_index];
+    if (trace) {
+        const auto end = std::chrono::steady_clock::now();
+        if (trace_rate.Ready(end)) {
+            const auto ms = [](auto duration) {
+                return std::chrono::duration<double, std::milli>(duration).count();
+            };
+            LOG_INFO(Render_Vulkan,
+                     "DKB layer applet_capture={} accelerated={} image_index={} "
+                     "accelerate_ms={:.3f} prepare_ms={:.3f} resource_wait_ms={:.3f} "
+                     "upload_ms={:.3f} configure_ms={:.3f}",
+                     filters.is_applet_capture, use_accelerated, image_index,
+                     ms(accelerated - entered), ms(prepared - accelerated), ms(waited - prepared),
+                     ms(uploaded - waited), ms(end - uploaded));
+        }
+    }
 }
 
 void Layer::CreateDescriptorPool(const Device& device) {

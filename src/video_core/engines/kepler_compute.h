@@ -23,6 +23,7 @@
 #include "video_core/game_dlss_status.h"
 #include "video_core/macro.h"
 #include "video_core/native_qmd.h"
+#include "video_core/ocarina_video.h"
 #include "video_core/textures/texture.h"
 
 namespace Core {
@@ -268,7 +269,17 @@ private:
     std::unique_ptr<FrontState> front;
     bool front_macros{}; ///< The front owns the macro code and bindings (the back skips them)
 
-    bool DispatchNativeCompute(const NativeQmdScheduler::Descriptor& descriptor);
+    bool DispatchNativeCompute(Core::System& system, const NativeQmdScheduler::Descriptor& descriptor);
+    bool ReplaceOcarinaVideo(Core::System& system, const NativeQmdScheduler::Descriptor& descriptor);
+    GPUVAddr executing_native_qmd{};
+    struct {
+        std::array<NativeQmdScheduler::Descriptor, VideoCommon::OcarinaVideo::PassCount> qmds;
+        std::array<VideoCommon::OcarinaVideo::Constants, VideoCommon::OcarinaVideo::PassCount> constants;
+        u32 next = VideoCommon::OcarinaVideo::PassCount;
+        GPUVAddr qmd_address{};
+        Texture::TICEntry input{}, enhanced{};
+        u64 admitted{}, completed{};
+    } ocarina_video;
     void ProcessNativeReportSemaphore(u32 argument);
     void DescribeNativeResources(const NativeQmdScheduler::Descriptor& qmd);
     void RememberDlssMotionVectors();

@@ -190,14 +190,20 @@ public:
     std::span<u8> BindMappedUniformBuffer([[maybe_unused]] size_t stage,
                                           [[maybe_unused]] u32 binding_index,
                                           u32 size) {
-        const StagingBufferRef ref = staging_pool.Request(size, MemoryUsage::Upload);
+        // Constant blocks are declared as 64 KiB in SPIR-V. Metal validates the full
+        // declaration against the backing buffer, including small streamed bindings.
+        const u32 allocation_size = device.IsMoltenVK() ? (std::max)(size, 65536U) : size;
+        const StagingBufferRef ref = staging_pool.Request(allocation_size, MemoryUsage::Upload);
+        if (device.IsMoltenVK()) {
+            std::fill(ref.mapped_span.begin() + size, ref.mapped_span.end(), 0);
+        }
         last_stream_uniform = StreamUniformRef{
             .buffer = ref.buffer,
             .device_address = ref.device_address,
             .offset = static_cast<u32>(ref.offset),
         };
         RebindStreamUniform(last_stream_uniform, size);
-        return ref.mapped_span;
+        return device.IsMoltenVK() ? ref.mapped_span.first(size) : ref.mapped_span;
     }
 
     /// The allocation of the latest BindMappedUniformBuffer call.

@@ -12,6 +12,7 @@
 #include <cstring>
 #include <fstream>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -26,6 +27,7 @@
 #include "video_core/nx2_profile.h"
 #include "video_core/nx2.h"
 #include "video_core/engines/fermi_2d.h"
+#include "video_core/texture_cache/image_info.h"
 #include "video_core/engines/kepler_compute.h"
 #include "video_core/engines/maxwell_3d.h"
 #include "video_core/game_dlss_status.h"
@@ -346,6 +348,7 @@ bool KeplerCompute::ProcessNativeMethod(Core::System& system, u32 method, u32 ar
         }
         const auto error = native_qmd.Signal(qmd_address, argument,
             [&](u64 address, NativeQmdScheduler::Descriptor& descriptor) {
+                executing_native_qmd = address;
                 if (!memory_manager.IsFullyMappedRange(address, sizeof(descriptor))) return false;
                 memory_manager.ReadBlockUnsafe(address, descriptor.data(), sizeof(descriptor));
                 if (static u32 logged{}; (descriptor[53] & (1U << 23)) && logged < 8) {
@@ -407,7 +410,7 @@ bool KeplerCompute::ProcessNativeMethod(Core::System& system, u32 method, u32 ar
                         VideoCommon::QueryPropertiesFlags::IsAFence, payload, 0);
                 }
                 return true;
-            }, [&](const auto& descriptor) { return DispatchNativeCompute(descriptor); });
+            }, [&](const auto& descriptor) { return DispatchNativeCompute(system, descriptor); });
         if (error.empty()) {
             LOG_DEBUG(HW_GPU, "Native QMD control action={:#x}, QMD={:#x}", argument, qmd_address);
             return true;
@@ -524,7 +527,186 @@ void KeplerCompute::CallMultiMethod(Core::System& system, u32 method, const u32*
     }
 }
 
-bool KeplerCompute::DispatchNativeCompute(const NativeQmdScheduler::Descriptor& qmd) {
+bool KeplerCompute::ReplaceOcarinaVideo(Core::System& system,
+                                      const NativeQmdScheduler::Descriptor& qmd) {
+    using namespace VideoCommon::OcarinaVideo;
+    static const bool enabled = [] {
+        const char* option = std::getenv("EDEN_NX2_ZELDA_VIDEO");
+        return option && std::string_view{option} == "spatial";
+    }();
+    if (!enabled || system.GetApplicationProcessProgramID() != ProgramId) {
+        return false;
+    }
+    const GPUVAddr cb = ConstantAddress(qmd);
+    const auto image = [&](u32 handle) -> std::optional<Texture::TICEntry> {
+        const u32 index = handle & 0xfffff;
+        const GPUVAddr address = regs.tic.Address() + u64{index} * sizeof(Texture::TICEntry);
+        if (!handle || index > regs.tic.limit ||
+            !memory_manager.IsFullyMappedRange(address, sizeof(Texture::TICEntry))) {
+            return std::nullopt;
+        }
+        return VideoCommon::TextureViewHeader(GetTICEntry(index), true);
+    };
+    const auto copy_video = [&](const Texture::TICEntry& input, const Texture::TICEntry& output) {
+        const auto surface = [](const Texture::TICEntry& tic) {
+            Fermi2D::Surface result{};
+            result.format = tic.format == Texture::TextureFormat::A2B10G10R10
+                                ? RenderTargetFormat::A2B10G10R10_UNORM
+                                : RenderTargetFormat::A8B8G8R8_UNORM;
+            result.linear = Fermi2D::MemoryLayout::BlockLinear;
+            result.block_height.Assign(tic.block_height);
+            result.depth = 1;
+            result.width = tic.Width();
+            result.height = tic.Height();
+            result.addr_upper = static_cast<u32>(tic.Address() >> 32);
+            result.addr_lower = static_cast<u32>(tic.Address());
+            return result;
+        };
+        const Fermi2D::Config copy{
+            .operation = Fermi2D::Operation::SrcCopy,
+            .filter = Fermi2D::Filter::Bilinear,
+            .must_accelerate = true,
+            .dst_x0 = 0, .dst_y0 = 0,
+            .dst_x1 = static_cast<s32>(output.Width()),
+            .dst_y1 = static_cast<s32>(output.Height()),
+            .src_x0 = 0, .src_y0 = 0, .src_x1 = 1920, .src_y1 = 1080,
+        };
+        return rasterizer->AccelerateSurfaceCopy(surface(input), surface(output), copy);
+    };
+    if (ocarina_video.next < PassCount) {
+        const u32 pass = ocarina_video.next;
+        const auto& expected = ocarina_video.qmds[pass];
+        const bool belongs = std::ranges::any_of(ocarina_video.qmds, [cb](const auto& saved) {
+            return ConstantAddress(saved) == cb;
+        });
+        if (!belongs) {
+            return false;
+        }
+        bool valid = SameWork(qmd, expected) &&
+                     executing_native_qmd == ocarina_video.qmd_address + u64{pass} * RecordStride;
+        // The SDK patches future constants and handles after admission. Resolve the actual
+        // endpoint bindings only when their dispatch runs; do not copy from stale preflight CBs.
+        if (valid && pass >= PassCount - 2) {
+            Constants constants{};
+            valid = memory_manager.IsFullyMappedRange(cb, sizeof(constants));
+            if (valid) {
+                memory_manager.ReadBlockUnsafe(cb, constants.data(), sizeof(constants));
+                if (pass == PassCount - 2) {
+                    const auto input = image(constants[0x70 / 4]);
+                    const auto enhanced = image(constants[0x78 / 4]);
+                    valid = input && enhanced && ValidPair(*input, *enhanced);
+                    if (valid) {
+                        ocarina_video.input = *input;
+                        ocarina_video.enhanced = *enhanced;
+                        valid = copy_video(*input, *enhanced);
+                    }
+                } else {
+                    const auto input = image(constants[0xa0 / 4]);
+                    const auto output = image(constants[0xc8 / 4]);
+                    valid = input && output && *input == ocarina_video.enhanced &&
+                            ValidOutput(ocarina_video.input, *output);
+                    if (valid) {
+                        valid = copy_video(*input, *output);
+                    }
+                }
+            }
+        }
+        if (!valid) {
+            // Running a native tail would consume intermediates this approximation omitted.
+            fmt::print(stderr, "Ocarina video contract changed: pass={} qmd={:#x} expected={:#x} work={}\n",
+                       pass, executing_native_qmd,
+                       ocarina_video.qmd_address + u64{pass} * RecordStride, SameWork(qmd, expected));
+            throw std::runtime_error("Ocarina video replacement contract changed after admission");
+        }
+        ++ocarina_video.next;
+        if (ocarina_video.next == PassCount &&
+            (++ocarina_video.completed <= 4 || ocarina_video.completed % 120 == 0)) {
+            LOG_INFO(HW_GPU, "Ocarina video replacement: completed={} admitted={}",
+                     ocarina_video.completed, ocarina_video.admitted);
+        }
+        return true;
+    }
+    if (cb < sizeof(Qmd) || !ValidDispatch(qmd, 0, cb)) {
+        return false;
+    }
+    static u64 attempts{};
+    if (++attempts % 120 == 0) {
+        LOG_INFO(HW_GPU, "Ocarina video replacement totals: attempts={} admitted={} completed={}",
+                 attempts, ocarina_video.admitted, ocarina_video.completed);
+    }
+    // Validate all command and constant records before replacing any work. This is an opt-in
+    // contract for the captured SDK allocation, not a search for arbitrary image handles.
+    std::vector<u8> code;
+    for (u32 i = 0; i < PassCount; ++i) {
+        const GPUVAddr address = executing_native_qmd + u64{i} * RecordStride;
+        const GPUVAddr constant = cb + u64{i} * RecordStride;
+        if (!memory_manager.IsFullyMappedRange(address, sizeof(Qmd)) ||
+            !memory_manager.IsFullyMappedRange(constant, sizeof(Constants))) {
+            return false;
+        }
+        auto& descriptor = ocarina_video.qmds[i];
+        auto& constants = ocarina_video.constants[i];
+        memory_manager.ReadBlockUnsafe(address, descriptor.data(), sizeof(descriptor));
+        memory_manager.ReadBlockUnsafe(constant, constants.data(), sizeof(constants));
+        if (!ValidDispatch(descriptor, i, constant) ||
+            (i == 0 && descriptor != qmd) || descriptor[15] != qmd[15] ||
+            descriptor[24] != qmd[24] || descriptor[25] != qmd[25] ||
+            constants[1] != descriptor[12] || constants[2] != descriptor[13] || constants[3] != 1) {
+            static u32 logged{};
+            if (logged++ < 4) LOG_INFO(HW_GPU, "Ocarina video preflight rejected QMD {} at {:#x}", i, address);
+            return false;
+        }
+        const GPUVAddr program = (GPUVAddr{descriptor[49] & 0x1ffff} << 32) | descriptor[48];
+        code.resize(Passes[i].bytes);
+        if (!memory_manager.IsFullyMappedRange(program, code.size())) {
+            return false;
+        }
+        memory_manager.ReadBlockUnsafe(program, code.data(), code.size());
+        u64 hash = 14695981039346656037ULL;
+        for (const u8 byte : code) {
+            hash = (hash ^ byte) * 1099511628211ULL;
+        }
+        if (hash != Passes[i].key) {
+            static u32 logged{};
+            if (logged++ < 4) LOG_INFO(HW_GPU, "Ocarina video preflight rejected program {} hash={:016x}", i, hash);
+            return false;
+        }
+    }
+    const auto& first = ocarina_video.constants.front();
+    const auto& last = ocarina_video.constants.back();
+    const auto& enhancement = ocarina_video.constants[PassCount - 2];
+    const auto input = image(first[0x58 / 4]);
+    const auto final_input = image(enhancement[0x70 / 4]);
+    const auto enhanced = image(enhancement[0x78 / 4]);
+    const auto upscale_input = image(last[0xa0 / 4]);
+    const auto output = image(last[0xc8 / 4]);
+    if (!input || !final_input || !enhanced || !upscale_input || !output ||
+        *input != *final_input || *enhanced != *upscale_input ||
+        !ValidPair(*input, *enhanced) || !ValidOutput(*input, *output)) {
+        static u32 logged{};
+        if (logged++ < 4) {
+            LOG_INFO(HW_GPU, "Ocarina video preflight rejected image contract: input={} final_input={} output={}",
+                     input ? fmt::format("{:016x}", fmt::join(input->raw, ",")) : "missing",
+                     final_input ? fmt::format("{:016x}", fmt::join(final_input->raw, ",")) : "missing",
+                     output ? fmt::format("{:016x}", fmt::join(output->raw, ",")) : "missing");
+        }
+        return false;
+    }
+    ocarina_video.next = 1;
+    ocarina_video.qmd_address = executing_native_qmd;
+    ++ocarina_video.admitted;
+    static u32 logged{};
+    if (logged++ < 4) {
+        LOG_INFO(HW_GPU, "Ocarina video replacement admitted: spatial 1920x1080 to 2560x1440; endpoints resolved at execution; QMD releases retained");
+    }
+    return true;
+}
+
+bool KeplerCompute::DispatchNativeCompute(Core::System& system,
+                                         const NativeQmdScheduler::Descriptor& qmd) {
+    if (ReplaceOcarinaVideo(system, qmd)) {
+        return true;
+    }
     launch_description = {};
     launch_description.grid_dim_x.Assign(qmd[12]);
     launch_description.grid_dim_y.Assign(qmd[13] & 0xffff);

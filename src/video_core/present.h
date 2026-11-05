@@ -24,6 +24,7 @@ static inline Settings::AntiAliasing GetAntiAliasingForAppletCapture() {
 struct PresentFilters {
     Settings::ScalingFilter (*get_scaling_filter)();
     Settings::AntiAliasing (*get_anti_aliasing)();
+    bool is_applet_capture{};
 };
 
 constexpr PresentFilters PresentFiltersForDisplay{
@@ -34,4 +35,5 @@ constexpr PresentFilters PresentFiltersForDisplay{
 constexpr PresentFilters PresentFiltersForAppletCapture{
     .get_scaling_filter = &GetScalingFilterForAppletCapture,
     .get_anti_aliasing = &GetAntiAliasingForAppletCapture,
+    .is_applet_capture = true,
 };

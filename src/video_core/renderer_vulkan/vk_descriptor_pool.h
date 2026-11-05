@@ -32,6 +32,7 @@ struct DescriptorBankInfo {
     u32 images{};          ///< Number of image descriptors
     u32 sampled_images{};  ///< Number of sampled image descriptors (without a sampler)
     u32 samplers{};        ///< Number of sampler descriptors
+    VkDescriptorPoolCreateFlags flags{};
     s32 score{};           ///< Number of descriptors in total
 };
 

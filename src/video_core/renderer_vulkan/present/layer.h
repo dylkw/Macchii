@@ -9,6 +9,7 @@
 #include <optional>
 #include <variant>
 
+#include "common/dkb_frame_trace.h"
 #include "common/math_util.h"
 #include "video_core/host1x/gpu_device_memory_manager.h"
 #include "video_core/vulkan_common/vulkan_wrapper.h"
@@ -84,6 +85,7 @@ private:
     void UpdateRawImage(const Tegra::FramebufferConfig& framebuffer, size_t image_index);
 
 private:
+    Common::DkbFrameTrace::RateLimit trace_rate;
     MemoryAllocator& memory_allocator;
     Scheduler& scheduler;
     Tegra::MaxwellDeviceMemoryManager& device_memory;

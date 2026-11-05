@@ -148,7 +148,7 @@ public:
     DescriptorLayoutBuilder(const Device& device_) : device{&device_} {}
 
     bool CanUsePushDescriptor() const noexcept {
-        if (!device->IsKhrPushDescriptorSupported() ||
+        if (requires_argument_buffers || !device->IsKhrPushDescriptorSupported() ||
             num_descriptors > device->MaxPushDescriptors()) {
             return false;
         }
@@ -158,7 +158,7 @@ public:
 
     bool CanUseDescriptorBuffer() const noexcept {
         const auto& props = device->DescriptorBufferProperties();
-        if (!device->IsExtDescriptorBufferSupported() || bindings.empty() ||
+        if (requires_argument_buffers || !device->IsExtDescriptorBufferSupported() || bindings.empty() ||
             !props.combinedImageSamplerDescriptorSingleArray) {
             return false;
         }
@@ -196,11 +196,26 @@ public:
         if (use_descriptor_buffer) {
             flags |= VK_DESCRIPTOR_SET_LAYOUT_CREATE_DESCRIPTOR_BUFFER_BIT_EXT;
         }
+        const bool update_after_bind = requires_argument_buffers &&
+                                       device->IsSampledImageUpdateAfterBindSupported();
+        if (update_after_bind) {
+            flags |= VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT;
+        }
         boost::container::small_vector<VkDescriptorBindingFlags, 32> binding_flags;
         VkDescriptorSetLayoutBindingFlagsCreateInfo binding_flags_ci{};
         const void* pnext = nullptr;
-        if (!use_push_descriptor && device->IsDescriptorBindingPartiallyBoundSupported()) {
-            binding_flags.assign(bindings.size(), VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT);
+        if (!use_push_descriptor &&
+            (device->IsDescriptorBindingPartiallyBoundSupported() || update_after_bind)) {
+            binding_flags.assign(bindings.size(), device->IsDescriptorBindingPartiallyBoundSupported()
+                                                     ? VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT
+                                                     : 0);
+            if (update_after_bind) {
+                for (size_t i = 0; i < bindings.size(); ++i) {
+                    if (bindings[i].descriptorType == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER) {
+                        binding_flags[i] |= VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
+                    }
+                }
+            }
             binding_flags_ci = {
                 .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO,
                 .pNext = nullptr,
@@ -271,6 +286,10 @@ public:
     void Add(const Shader::Info& info, VkShaderStageFlags stage) {
         is_compute |= (stage & VK_SHADER_STAGE_COMPUTE_BIT) != 0;
         uses_mesh |= (stage & (VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT)) != 0;
+        // MoltenVK lowers push descriptors to direct Metal bindings, limited to 16 samplers
+        // per stage. Larger stages need a regular set backed by a Metal argument buffer.
+        requires_argument_buffers |= device->IsMoltenVK() &&
+                                     Shader::NumDescriptors(info.texture_descriptors) > 16;
 
         Add(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, stage, info.constant_buffer_descriptors);
         Add(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, stage, info.storage_buffers_descriptors);
@@ -309,6 +328,7 @@ private:
     const Device* device{};
     bool is_compute{};
     bool uses_mesh{};
+    bool requires_argument_buffers{};
     boost::container::small_vector<VkDescriptorSetLayoutBinding, 32> bindings;
     boost::container::small_vector<VkDescriptorUpdateTemplateEntry, 32> entries;
     u32 binding{};

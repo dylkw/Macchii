@@ -29,7 +29,7 @@ struct DescriptorBank {
 };
 
 bool DescriptorBankInfo::IsSuperset(const DescriptorBankInfo& subset) const noexcept {
-    return uniform_buffers >= subset.uniform_buffers && storage_buffers >= subset.storage_buffers &&
+    return flags == subset.flags && uniform_buffers >= subset.uniform_buffers && storage_buffers >= subset.storage_buffers &&
            texture_buffers >= subset.texture_buffers && image_buffers >= subset.image_buffers &&
            textures >= subset.textures && images >= subset.images &&
            sampled_images >= subset.sampled_images && samplers >= subset.samplers;
@@ -44,9 +44,13 @@ static u32 Accumulate(const Descriptors& descriptors) {
     return count;
 }
 
-static DescriptorBankInfo MakeBankInfo(std::span<const Shader::Info> infos) {
+static DescriptorBankInfo MakeBankInfo(const Device& device, std::span<const Shader::Info> infos) {
     DescriptorBankInfo bank;
     for (const Shader::Info& info : infos) {
+        if (device.IsMoltenVK() && device.IsSampledImageUpdateAfterBindSupported() &&
+            Shader::NumDescriptors(info.texture_descriptors) > 16) {
+            bank.flags |= VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT;
+        }
         bank.uniform_buffers += Accumulate(info.constant_buffer_descriptors);
         bank.storage_buffers += Accumulate(info.storage_buffers_descriptors);
         bank.texture_buffers += Accumulate(info.texture_buffer_descriptors);
@@ -83,7 +87,7 @@ static void AllocatePool(const Device& device, DescriptorBank& bank) {
     bank.pools.push_back(device.GetLogical().CreateDescriptorPool({
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
         .pNext = nullptr,
-        .flags = 0,
+        .flags = info.flags,
         .maxSets = sets_per_pool,
         .poolSizeCount = static_cast<u32>(pool_cursor),
         .pPoolSizes = std::data(pool_sizes),
@@ -132,11 +136,11 @@ DescriptorPool::DescriptorPool(const Device& device_, Scheduler& scheduler) {}
 DescriptorPool::~DescriptorPool() = default;
 
 DescriptorAllocator DescriptorPool::Allocator(const Device& device, Scheduler& scheduler, VkDescriptorSetLayout layout, std::span<const Shader::Info> infos) {
-    return Allocator(device, scheduler, layout, MakeBankInfo(infos));
+    return Allocator(device, scheduler, layout, MakeBankInfo(device, infos));
 }
 
 DescriptorAllocator DescriptorPool::Allocator(const Device& device, Scheduler& scheduler, VkDescriptorSetLayout layout, const Shader::Info& info) {
-    return Allocator(device, scheduler, layout, MakeBankInfo(std::array{info}));
+    return Allocator(device, scheduler, layout, MakeBankInfo(device, std::array{info}));
 }
 
 DescriptorAllocator DescriptorPool::Allocator(const Device& device, Scheduler& scheduler, VkDescriptorSetLayout layout, const DescriptorBankInfo& info) {

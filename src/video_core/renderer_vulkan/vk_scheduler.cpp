@@ -129,15 +129,17 @@ Scheduler::Scheduler(const Device& device_, StateTracker& state_tracker_)
                     .pipelineStatistics = 0,
                 });
                 trace_submissions.resize(TraceMaxSubmissions);
+                // Apple's timestamp sample buffers are limited to 32 KiB on some devices.
+                const u32 max_work = device.IsMoltenVK() ? 1024 : TraceMaxWork;
                 trace_work_pool = device.GetLogical().CreateQueryPool({
                     .sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,
                     .pNext = nullptr,
                     .flags = 0,
                     .queryType = VK_QUERY_TYPE_TIMESTAMP,
-                    .queryCount = TraceMaxWork * 2,
+                    .queryCount = max_work * 2,
                     .pipelineStatistics = 0,
                 });
-                trace_work_items.resize(TraceMaxWork);
+                trace_work_items.resize(max_work);
             } catch (const vk::Exception& error) {
                 LOG_WARNING(Render_Vulkan, "DKB gpu_timestamp unavailable: {}", error.what());
             }
@@ -751,7 +753,8 @@ void Scheduler::TraceGpuSubmission() {
     current_upload_cmdbuf.ResetQueryPool(*trace_query_pool, trace_gpu_count * 2, 2);
     if (trace_gpu_count == 0 && trace_work_pool) {
         // Draws are timed inside render passes, where queries cannot be reset.
-        current_upload_cmdbuf.ResetQueryPool(*trace_work_pool, 0, TraceMaxWork * 2);
+        current_upload_cmdbuf.ResetQueryPool(*trace_work_pool, 0,
+                                           static_cast<u32>(trace_work_items.size()) * 2);
     }
     current_upload_cmdbuf.WriteTimestamp(VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, *trace_query_pool,
                                         trace_gpu_count * 2);

@@ -86,7 +86,8 @@ public:
     template <typename Func>
     void TraceGpuWork(vk::CommandBuffer cmdbuf, u64 hash, u64 fragment_hash,
                       std::array<u32, 3> size, Func&& work) {
-        if (!trace_gpu_recording || !trace_work_pool || trace_work_count == TraceMaxWork) {
+        if (!trace_gpu_recording || !trace_work_pool ||
+            trace_work_count >= trace_work_items.size()) {
             work();
             return;
         }
