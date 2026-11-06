@@ -7,14 +7,16 @@
 -->
 
 <p align="center">
-  <img src="dist/branding/lichii_icon_with_logo.png" alt="Lichii" width="600">
+  <img src="dist/branding/Macchii.png" alt="Macchii" width="600">
 </p>
 
-# Lichii
+# Macchii
 
-Lichii is an experimental, open-source Nintendo Switch and Switch 2 emulator written in C++. It builds on Eglantine, Eden, yuzu and Sudachi, preserving their contributions while developing this fork's game compatibility and renderer fixes.
+Macchii
 
-This is an independent fork, not an official release of those upstream projects. Lichii is not affiliated with Nintendo.
+This is an independent fork, not an official release of those upstream projects. Macchii is not affiliated with Nintendo.
+
+**Credits to [Zortos293](https://github.com/zortos293) for creating the upstream [Lichii repo](https://github.com/zortos293/Lichii).**
 
 ## Downloads and setup
 
@@ -45,6 +47,7 @@ See the [build guide](docs/Build.md), [user documentation](docs/user/README.md) 
 Keep changes focused and distinguish code-level checks from actual gameplay testing.
 
 ## Artwork
+
 Art created by YOB (yobslab)
 The supplied Lichii logo, icon and library artwork are in [dist/branding](dist/branding). Windows, Linux and macOS icon resources are generated from that artwork by [Generate-LichiiIcons.ps1](tools/Generate-LichiiIcons.ps1).
 
@@ -53,26 +56,31 @@ The supplied Lichii logo, icon and library artwork are in [dist/branding](dist/b
 Lichii is free and stays free. If you want to help, you can donate in crypto. Donations help pay for the AI tools and build machines used to develop this open-source project faster.
 
 **Solana (SOL)**
+
 ```text
 JepEjfyWjGjhJvHSrqj52KtLjcbbbmUh1iGqerYBF4w
 ```
 
 **Ethereum (ETH)**
+
 ```text
 0x055ABa1b80Bc35C836Ce7E9F47c2b3d6C75b5534
 ```
 
 **Bitcoin (BTC)**
+
 ```text
 bc1qcvxdpf4qvdhqp8ee4s355cjmxrzsphsdwpl8w4
 ```
 
 **BNB Smart Chain (BNB)**
+
 ```text
 0x055ABa1b80Bc35C836Ce7E9F47c2b3d6C75b5534
 ```
 
 **Polygon**
+
 ```text
 0x055ABa1b80Bc35C836Ce7E9F47c2b3d6C75b5534
 ```
