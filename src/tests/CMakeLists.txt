@@ -48,6 +48,7 @@ add_executable(tests
     video_core/framebuffer_clear_layers.cpp
     video_core/fire_emblem_upscale.cpp
     video_core/ocarina_video.cpp
+    video_core/query_copy.cpp
     video_core/dlss_contract.cpp
     video_core/ampere_fast_fusion.cpp
     video_core/ampere_async_copy.cpp

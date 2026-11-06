@@ -1734,8 +1734,12 @@ void QueryCacheRuntime::SyncValues(std::span<SyncValuesType> values, VkBuffer ba
     impl->scheduler.Record([src_buffer, dst_buffers = std::move(impl->buffers_to_upload_to), vk_copies = std::move(impl->copies_setup)](vk::CommandBuffer cmdbuf) {
         size_t size = dst_buffers.size();
         for (size_t i = 0; i < size; i++) {
-            const auto copies = NonOverlappingQueryCopies(vk_copies[i]);
-            cmdbuf.CopyBuffer(src_buffer, dst_buffers[i].first, copies);
+            if (vk_copies[i].size() <= 1) {
+                cmdbuf.CopyBuffer(src_buffer, dst_buffers[i].first, vk_copies[i]);
+            } else {
+                const auto copies = NonOverlappingQueryCopies(vk_copies[i]);
+                cmdbuf.CopyBuffer(src_buffer, dst_buffers[i].first, copies);
+            }
         }
     });
 }
