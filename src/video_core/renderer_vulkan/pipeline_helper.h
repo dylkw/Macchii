@@ -24,6 +24,20 @@ namespace Vulkan {
 
 using Shader::Backend::SPIRV::NUM_TEXTURE_AND_IMAGE_SCALING_WORDS;
 
+inline void LabelPipelineLayout(const Device& device, VkPipelineLayout layout, const char* name) {
+    const auto& dispatch = device.GetDispatchLoader();
+    if (!Settings::values.renderer_debug.GetValue() || !dispatch.vkSetDebugUtilsObjectNameEXT) {
+        return;
+    }
+    const VkDebugUtilsObjectNameInfoEXT info{
+        .sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT,
+        .objectType = VK_OBJECT_TYPE_PIPELINE_LAYOUT,
+        .objectHandle = reinterpret_cast<u64>(layout),
+        .pObjectName = name,
+    };
+    vk::Check(dispatch.vkSetDebugUtilsObjectNameEXT(*device.GetLogical(), &info));
+}
+
 [[nodiscard]] inline std::optional<PixelFormat> PixelFormatFromImageFormat(
     Shader::ImageFormat format) {
     switch (format) {

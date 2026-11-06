@@ -324,6 +324,8 @@ GraphicsPipeline::GraphicsPipeline(
 
     const VkDescriptorSetLayout set_layout{*descriptor_set_layout};
     pipeline_layout = builder.CreatePipelineLayout(set_layout);
+    LabelPipelineLayout(device, *pipeline_layout,
+                        fmt::format("Graphics {:016x}", key.Hash()).c_str());
     if (!uses_descriptor_buffer) {
         descriptor_update_template =
             builder.CreateTemplate(set_layout, *pipeline_layout, uses_push_descriptor);

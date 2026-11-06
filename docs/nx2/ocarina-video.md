@@ -1,5 +1,9 @@
 # Ocarina video replacement experiment
 
+The immediate acceptance target is to reach controllable gameplay after the opening video,
+then sustain 30 fps at normal emulation speed. Video playback alone does not satisfy either
+target. The original 60 fps gameplay goal remains a later milestone.
+
 `EDEN_NX2_ZELDA_VIDEO=spatial` enables a deliberately approximate replacement for the captured
 1080p neural video enhancement in title `0400486024DEC000`. Unset the variable to retain native
 processing. This is an opt-in development experiment, not an unconditional emulation fix or a
@@ -108,3 +112,55 @@ That driver reached further into scene rendering, where validation caught the ca
 boundary above and a null 1D view bound to 2D/3D shader declarations. Sampled null descriptors
 now use separate 1D, 2D/cube and 3D backing images, cleared to zero and transitioned to GENERAL.
 Scene rendering and gameplay performance still require validation after these corrections.
+
+## Scene synchronization follow-up
+
+The macOS candidate incorporates the scheduler-owner and back-idle synchronization changes from
+[Eglantine PR #639](https://github.com/Djihads80/Eglantine/pull/639), commit
+`df92fc6c95461d2fc07ab6357301e5a212e0e03f`, through the upstream merge. It also ports
+[PR #654](https://github.com/Djihads80/Eglantine/pull/654), commit
+`72ca8e7244fdbff81d8902a2b81e5b908e56815e`: forced fence waits on the back thread submit deferred
+work first and disable deferral until the wait returns. These address specific scheduler races
+and a deferred-submission deadlock; they are not yet evidence that the macOS scene stall is fixed.
+The opt-in GPU workload trace now includes direct task/mesh draws as well as ordinary draws.
+
+An allocation-stack investigation also identified substantial ARM64 CPU recompiler metadata:
+each emitted block's small relocation and fastmem-patch maps used full hash-table allocations.
+Those per-block maps now use sorted flat maps. Block metadata is moved into its cache, and
+emission returns only the entry pointer; linking also avoids copying relocation lists.
+The existing ordinary ARM64 instruction, memory-operation and invalidation tests passed
+438 assertions in 85 cases. An explicitly selected hidden random-instruction test (`A64: rand2`)
+aborted; its baseline behavior has not been established. At the same intro point, live malloc
+allocations fell from about 5.8 GiB to 2.9 GiB, and process footprint from 12.2 GiB to 9.3 GiB.
+The first-scene sample fell from 17.9 GiB to 14.0 GiB. Intro playback remained near 60 fps, but
+the scene still stalled at 0–0.2 fps; the memory reduction does not establish gameplay progress.
+
+The scene test also coincided with a WindowServer watchdog termination on November 5 at
+21:39:22 local time. Its report records 40 seconds without a successful check-in. The watchdog
+stackshot identifies the test's already-terminated `eden-cli` process blocked in IOGPU/AGX kernel
+cleanup. Earlier live samples show Metal command-buffer allocation waiting for a queue slot and
+the emulator's GPU back thread waiting for a timeline value. These establish a host graphics
+hang during the failed run, but do not identify the offending command or prove memory pressure
+as its cause. Killing the process did not promptly release the driver resources.
+
+Further gameplay launches were suspended while investigating that failure. An isolated MoltenVK
+experiment can leave its queue-wide residency set disabled, selecting the driver's existing
+per-encoder resource tracking. This follows the lead in
+[MoltenVK issue #2890](https://github.com/KhronosGroup/MoltenVK/issues/2890); the reported workload
+and memory thresholds differ from this test, so it remains an unproven candidate. With Metal
+validation, small standalone transfer and descriptor-backed compute checks passed in both modes:
+eight timeline submissions, 256 KiB per submission, full readback comparison and clean teardown.
+These checks establish basic operation only, not Zelda correctness or driver stability under
+the game's workload. The candidate is workspace-local and has not been installed system-wide.
+
+The subsequent normal-speed scene test with residency disabled still stalled: logged frame rate
+fell to 1.5 fps at 202 seconds, then 0 fps. The worker/back-thread sample again showed Metal
+command-buffer allocation and timeline waits. Disabling residency alone is therefore rejected
+as the scene-transition fix. That bounded run exited normally; no new WindowServer report was
+observed afterward.
+
+Half-second taps and five-second holds of Plus, X and B during the movie left it playing with
+no visible skip prompt in the captured states. No intro-skip shortcut is confirmed. Earlier menu
+inputs reduced time to the failing transition by roughly 25 seconds. The test harness now checks
+the live presented-frame count for stalls, because buffered console FPS output delayed its first
+log-based watchdog. Controllable gameplay and the 30 fps milestone remain unachieved.

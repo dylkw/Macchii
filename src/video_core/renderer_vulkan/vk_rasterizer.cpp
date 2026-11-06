@@ -756,8 +756,11 @@ void RasterizerVulkan::Draw(bool is_indexed, u32 instance_count) {
         }
 
         if (mesh_draw) {
-            scheduler.Record([groups = draw_params.num_vertices](vk::CommandBuffer cmdbuf) {
-                cmdbuf.DrawMeshTasksEXT(groups, 1, 1);
+            scheduler.Record([this, groups = draw_params.num_vertices,
+                              hashes = trace_draw_hashes](vk::CommandBuffer cmdbuf) {
+                scheduler.TraceGpuWork(cmdbuf, hashes.first, hashes.second, {groups, 1, 1}, [&] {
+                    cmdbuf.DrawMeshTasksEXT(groups, 1, 1);
+                });
             });
             return;
         }

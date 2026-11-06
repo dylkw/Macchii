@@ -233,6 +233,8 @@ ComputePipeline::ComputePipeline(const Device& device_, Scheduler& scheduler, vk
         }
     }
     pipeline_layout = builder.CreatePipelineLayout(*descriptor_set_layout);
+    LabelPipelineLayout(device, *pipeline_layout,
+                        fmt::format("Compute {:016x}", shader_hash).c_str());
     if (!uses_descriptor_buffer) {
         descriptor_update_template =
             builder.CreateTemplate(*descriptor_set_layout, *pipeline_layout, uses_push_descriptor);
