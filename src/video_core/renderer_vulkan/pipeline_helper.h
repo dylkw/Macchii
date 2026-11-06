@@ -301,10 +301,13 @@ public:
     void Add(const Shader::Info& info, VkShaderStageFlags stage) {
         is_compute |= (stage & VK_SHADER_STAGE_COMPUTE_BIT) != 0;
         uses_mesh |= (stage & (VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT)) != 0;
-        // MoltenVK lowers push descriptors to direct Metal bindings, limited to 16 samplers
-        // per stage. Larger stages need a regular set backed by a Metal argument buffer.
+        // Direct Metal bindings allow 16 samplers and 31 buffers per stage; push constants
+        // consume one buffer slot. Native global bounds also need implicit buffer-size data.
+        const u32 buffers = Shader::NumDescriptors(info.constant_buffer_descriptors) +
+                            Shader::NumDescriptors(info.storage_buffers_descriptors);
         requires_argument_buffers |= device->IsMoltenVK() &&
-                                     Shader::NumDescriptors(info.texture_descriptors) > 16;
+                                     (Shader::NumDescriptors(info.texture_descriptors) > 16 ||
+                                      buffers > 30 || info.native_global_bounds);
 
         Add(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, stage, info.constant_buffer_descriptors);
         Add(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, stage, info.storage_buffers_descriptors);

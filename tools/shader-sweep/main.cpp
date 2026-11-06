@@ -102,6 +102,10 @@ u64 CbufKey(u32 bank, u32 offset) {
     return (u64{bank} << 32) | offset;
 }
 
+u64 IndirectCbufKey(u32 bank, u32 offset, u32 indirect) {
+    return (u64{1} << 63) | (u64{indirect & 0x3fffff} << 40) | CbufKey(bank, offset);
+}
+
 class OfflineEnvironment final : public Shader::Environment {
 public:
     void Load(std::span<const u8> bytes, u32 version) {
@@ -242,6 +246,10 @@ public:
     }
     bool IsCbufStorageBufferPointer(u32 bank, u32 offset) override {
         return Lookup(pointers, CbufKey(bank, offset), "storage pointer classification") != 0;
+    }
+    bool IsCbufIndirectStorageBufferPointer(u32 bank, u32 offset, u32 indirect) override {
+        return Lookup(pointers, IndirectCbufKey(bank, offset, indirect),
+                      "storage pointer table classification") != 0;
     }
     u32 ReadCbufValue(u32 bank, u32 offset) override {
         return Lookup(cbuf_values, CbufKey(bank, offset), "constant buffer value");
@@ -525,14 +533,15 @@ int main(int argc, char** argv) {
         u32 version{};
         bool lower_only{};
         bool capture_extent{};
+        bool native_buffer_bounds{};
         for (int i = 1; i < argc; ++i) {
             const std::string arg{argv[i]};
             if (arg == "--help") {
                 std::cout << "shader-sweep [INPUT] [--stage "
                              "vertex|tess-control|tess-eval|geometry|fragment|compute]\n"
                              "  [--format instructions|native-header] [--environment FILE "
-                             "--cache-version 46|47|48|49|50]\n"
-                             "  [--pipeline-key FILE] [--capture-extent] "
+                             "--cache-version 46|47|48|49|50|51|52|53|54]\n"
+                             "  [--pipeline-key FILE] [--capture-extent] [--native-buffer-bounds] "
                              "(--output SPV | --lower-only WORDS)\n";
                 return 0;
             }
@@ -540,6 +549,10 @@ int main(int argc, char** argv) {
                 if (!input.empty())
                     throw std::runtime_error("Multiple input files");
                 input = arg;
+                continue;
+            }
+            if (arg == "--native-buffer-bounds") {
+                native_buffer_bounds = true;
                 continue;
             }
             if (arg == "--capture-extent") {
@@ -558,8 +571,9 @@ int main(int argc, char** argv) {
             else if (arg == "--pipeline-key")
                 pipeline_key = value;
             else if (arg == "--cache-version") {
-                if (value != "46" && value != "47" && value != "48" && value != "49" && value != "50")
-                    throw std::runtime_error("Expected cache version 46, 47, 48, 49 or 50");
+                if (value != "46" && value != "47" && value != "48" && value != "49" &&
+                    value != "50" && value != "51" && value != "52" && value != "53" && value != "54")
+                    throw std::runtime_error("Expected cache version 46 to 54");
                 version = static_cast<u32>(std::stoul(value));
             } else if (arg == "--output" || arg == "--lower-only") {
                 if (!output.empty())
@@ -728,6 +742,7 @@ int main(int argc, char** argv) {
         Shader::Profile profile{};
         profile.supported_spirv = 0x00010400;
         profile.unified_descriptor_binding = true;
+        profile.needs_native_buffer_bounds = native_buffer_bounds;
         profile.min_ssbo_alignment = host.min_ssbo_alignment;
         profile.support_int64 = true;
         profile.support_int16 = true;

@@ -38,9 +38,15 @@ new lowering no longer produces the exact bytes stored in the older cache.
 
 ## Inputs and coverage
 
-The loader reads little-endian `yuzucach` Vulkan caches, fork versions 46 through 50. It verifies each
+The loader reads little-endian `yuzucach` Vulkan caches, fork versions 46 through 54. It verifies each
 record boundary and rejects unknown versions or truncated input. Version 47 includes captured
-storage-pointer classifications; versions 48 through 50 retain that layout and version 46 omits them.
+storage-pointer classifications; versions 48 through 54 retain that layout and version 46 omits them.
+Version 51 invalidates translations after folding identity multiplies and recombined XMAD halves.
+Version 52 adds indirect pointer classifications in the existing classification map; version 53
+invalidates CAS helpers after changing their initial word reads to atomics. Version 54
+invalidates translations after native global accesses gain bound-array length checks.
+`--native-buffer-bounds` selects those checks for offline MoltenVK investigations;
+it requires the source Sirit API supplied by the repository patch.
 Version 49 invalidates pipelines after tessellation patch-size clamping. Version 50 captures the
 additional texture-table context needed by dynamic texture/static sampler composition. Neither
 changes the serialized layout.

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Replay native shader captures and v46-v50 pipeline caches without a GPU."""
+"""Replay native shader captures and v46-v54 pipeline caches without a GPU."""
 
 import argparse
 from collections import Counter, defaultdict
@@ -50,7 +50,7 @@ def parse_cache(data):
     if len(data) < 12 or data[:8] != b"yuzucach":
         raise CacheError("not a serialized shader-environment cache")
     version, = struct.unpack_from("<I", data, 8)
-    if version not in (46, 47, 48, 49, 50):
+    if version not in (46, 47, 48, 49, 50, 51, 52, 53, 54):
         raise CacheError(f"unsupported cache version {version}")
     cursor = 12
     entry = 0
@@ -154,6 +154,8 @@ def main():
     parser.add_argument("--compiler", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--spirv-val", default="spirv-val")
+    parser.add_argument("--native-buffer-bounds", action="store_true",
+                        help="emit the MoltenVK native-buffer bounds checks")
     parser.add_argument("--jobs", type=int, default=4)
     parser.add_argument("--timeout", type=int, default=60)
     parser.add_argument("--dump-game", default="Mario Tennis Fever")
@@ -284,6 +286,8 @@ def main():
     def compile_one(job):
         output = records_dir / f"{job['id']}.spv"
         command = [compiler, "--output", str(output)]
+        if args.native_buffer_bounds:
+            command.append("--native-buffer-bounds")
         if job["kind"] == "native":
             command += [job["source"], "--stage", job["stage"], "--format", job["format"]]
         if "env" in job:

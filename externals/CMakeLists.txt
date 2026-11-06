@@ -189,8 +189,11 @@ endif()
 AddJsonPackage(spirv-headers)
 
 # Sirit
-if (YUZU_USE_BUNDLED_SIRIT)
+if (YUZU_USE_BUNDLED_SIRIT AND NOT APPLE)
     AddJsonPackage(sirit-ci)
+elseif (APPLE)
+    # MoltenVK's native buffer bounds need the patched source API.
+    AddJsonPackage(NAME sirit FORCE_BUNDLED_PACKAGE ON)
 else()
     AddJsonPackage(sirit)
     if(MSVC AND CXX_CLANG)

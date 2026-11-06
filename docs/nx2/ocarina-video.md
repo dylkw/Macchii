@@ -164,3 +164,79 @@ no visible skip prompt in the captured states. No intro-skip shortcut is confirm
 inputs reduced time to the failing transition by roughly 25 seconds. The test harness now checks
 the live presented-frame count for stalls, because buffered console FPS output delayed its first
 log-based watchdog. Controllable gameplay and the 30 fps milestone remain unachieved.
+
+## First GPU-side fault
+
+GPU-side Metal Shader Validation identified an invalid load in compute program
+`b76d7b3e9e93093d` at the first scene transition: byte offset 829783808 in a 65536-byte
+fallback buffer. The captured translation binds `c1[0]` as its storage base, although that
+word contains the offset `0x30`; the real pointer at `c0+0x20` is hidden behind the
+lowered multiply-by-one expression.
+
+The constant-propagation correction is ported from existing nx2 commit
+`f26ad432ae0a09da4b888b297afa67d7f4e2a9c2` (original commit
+`05435ee185268e4cb972eb3de00a611bed08c6f4`). It folds integer multiplies by zero/one and
+recombines extracted 16-bit halves. Vulkan cache version 51 and OpenGL version 47
+invalidate the old translations. The XMAD-pointer regression fails against the old
+compiler and passes with the correction; the storage-buffer suite passes 76 assertions
+in 13 cases. The captured v51 replay now rebases on the correct c0 pointer, and the
+original memory fault was absent in subsequent scene tests. Those tests still stalled;
+this correction alone does not establish working gameplay.
+
+The diagnostic run also exposed overlapping query-result destinations within one Vulkan
+buffer-copy command. Pending copies now preserve the last writer of each byte and use
+disjoint destinations. A seeded byte-content comparison passed 54149 assertions; the
+previously reported overlapping-copy validation errors were absent on the follow-up run.
+
+
+## Subsequent scene faults
+
+Full GPU validation next reported NaN/Inf vertex interpolants in graphics pipelines
+`894033cb63b81430` and `c86d8961b621e2f4` (vertex `025452a499db5380`). Disabling only the
+NaN/Inf diagnostic let memory validation continue and expose another invalid load:
+compute `331e607152ce78d5`, byte offset 436544 in a 131072-byte buffer. The captured
+translation reads dynamic c4 pointer slots but binds only four c0 bases. Ordinary native
+compute bindings were also still taking a descriptor size rather than treating the
+argument as a bare pointer.
+
+The pointer-tracking, indirect descriptor and binding portion of existing nx2 commit
+`f26ad432ae` is ported for this next fault. It follows dynamic pointer slots and loaded
+table entries, binds their backing buffers, and uses mapped-range sizing for indirect
+entries. Applying the 8 MiB native cap to every direct compute pointer caused new video
+buffer overflows before the intro, so direct compute retains its earlier DLSS/descriptor
+sizing policy. The pointer-table and CAS corrections remain for the next test.
+Unrelated core, macro and uniform-refresh hunks from that aggregate commit are omitted.
+
+Offline inspection also found that the generated Metal float-add CAS helper re-read its
+storage word after the atomic update instead of preserving the expected value. CAS
+helpers now use an atomic initial read and compare against that saved word, including
+packed shared/storage writes. The captured sky shader's patched SPIR-V validates and
+translates to a saved `atomic_load_explicit` temporary. Vulkan cache 53/OpenGL cache 49
+invalidate earlier pointer/CAS translations. This combined candidate still requires
+a bounded gameplay test; gameplay and 30 fps remain unconfirmed. The pointer/CAS suite
+passes 892 assertions in 15 cases. A tiny Metal test using the corrected generated helper
+passes 2048 contended float adds with GPU validation enabled.
+
+
+## MoltenVK descriptor and global-address bounds
+
+The pointer-table candidate exposed Metal buffer slots 31–34 in compute
+`331e607152ce78d5`, beyond the valid 0–30 range. The existing argument-buffer fallback
+now also handles buffer count, reserving a direct slot for push constants. The captured
+shader fails direct-binding compilation and compiles successfully through an argument
+buffer in an isolated compile-only check.
+
+GPU validation also reports a 139034256-byte fragment read against a 102432768-byte
+buffer in pipeline `ead2751b9bbf4ca0` (fragment `6b22f3196ce43ed4`). The native global
+fallback selected the closest preceding base without checking the buffer size. The
+MoltenVK profile now checks the bound runtime array length before selecting a candidate.
+Unmapped addresses retain zero/drop behavior, rather than indexing outside a host buffer.
+Native bounds use argument-buffer descriptors so their implicit size data fits Metal's
+resource slots.
+
+The source Sirit dependency has a tracked `OpArrayLength` patch; Apple builds select
+that source API. Vulkan cache 54/OpenGL 50 invalidate the old translations. The offline
+`--native-buffer-bounds` option replays this profile. The pointer/CAS/bounds suite passes
+1477 assertions in 16 cases, and replay of the captured fragment passes Vulkan 1.2
+SPIR-V validation with explicit bounds checks. The full build and strict game validation
+of this latest candidate are still pending. Gameplay and 30 fps remain unachieved.

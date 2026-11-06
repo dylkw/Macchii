@@ -16,6 +16,7 @@ struct Profile {
     u32 supported_spirv{0x00010000};
     bool unified_descriptor_binding{};
     bool support_descriptor_aliasing{};
+    bool needs_native_buffer_bounds{};
     bool support_int8{};
     bool support_uniform_and_storage_buffer_8bit{};
     bool support_storage_buffer_8bit{};

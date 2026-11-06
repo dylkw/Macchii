@@ -20,9 +20,13 @@ class TestEnvironment final : public Shader::Environment {
 public:
     bool native{};
     std::vector<u32> scalar_offsets;
+    std::vector<std::pair<u32, u32>> pointer_slots;
     TestEnvironment() { stage = Shader::Stage::Compute; }
     bool IsNativeProgram() const override { return native; }
     bool IsCbufStorageBufferPointer(u32 index, u32 offset) override {
+        if (!pointer_slots.empty()) {
+            return std::ranges::find(pointer_slots, std::pair{index, offset}) != pointer_slots.end();
+        }
         return index == 0 && std::ranges::find(scalar_offsets, offset) == scalar_offsets.end();
     }
     u64 ReadInstruction(u32) override { return 0; }
@@ -88,6 +92,49 @@ TEST_CASE("Kernel parameter pointers win over 16-byte aligned strides",
     const IR::U32 low{ir.IAdd(ir.IAdd(row, Word(ir, 0x178)), ir.ShiftLeftLogical(lane, ir.Imm32(4)))};
     ir.WriteGlobal32(Address(ir, low, Word(ir, 0x17c)), lane);
     CHECK(fixture.TrackedOffsets() == std::vector<u32>{0x178});
+}
+
+TEST_CASE("XMAD multiplication by one preserves the native atomic pointer",
+          "[shader][storage_buffer][ocarina_sky]") {
+    KernelProgram fixture;
+    fixture.env.native = true;
+    IR::IREmitter ir{fixture.entry};
+    const auto pointer_low = Word(ir, 0x20);
+    const auto low_half = ir.BitFieldExtract(pointer_low, ir.Imm32(0), ir.Imm32(16), false);
+    const auto high_half = ir.BitFieldExtract(pointer_low, ir.Imm32(16), ir.Imm32(16), false);
+    const auto cross = ir.IAdd(ir.IMul(high_half, ir.Imm32(1)),
+                              ir.IMul(low_half, ir.Imm32(0)));
+    const auto reconstructed = ir.IAdd(ir.ShiftLeftLogical(cross, ir.Imm32(16)),
+                                      ir.IMul(low_half, ir.Imm32(1)));
+    const auto offset = ir.GetCbuf(ir.Imm32(1), ir.Imm32(0));
+    const auto low = ir.IAdd(reconstructed, offset);
+    const auto high = ir.IAdd(ir.IMul(Word(ir, 0x24), ir.Imm32(1)),
+                             ir.GetCbuf(ir.Imm32(1), ir.Imm32(4)));
+    static_cast<void>(ir.GlobalAtomicIAdd(Address(ir, low, high), ir.Imm32(1)));
+    Shader::Optimization::ConstantPropagationPass(fixture.env, fixture.program);
+    CHECK(reconstructed.Resolve() == pointer_low.Resolve());
+    CHECK(fixture.TrackedOffsets() == std::vector<u32>{0x20});
+}
+
+TEST_CASE("Native computed pointer slots bind each mapped buffer",
+          "[shader][storage_buffer][ocarina_pointer_table]") {
+    KernelProgram fixture;
+    fixture.env.native = true;
+    fixture.env.pointer_slots = {{4, 0x10}, {4, 0x20}};
+    IR::IREmitter ir{fixture.entry};
+    const IR::U32 offset{ir.Select(ir.ILessThan(ir.LocalInvocationIdX(), ir.Imm32(4), false),
+                                   ir.ShiftLeftLogical(ir.LocalInvocationIdX(), ir.Imm32(4)),
+                                   ir.Imm32(0))};
+    const auto low = ir.GetCbuf(ir.Imm32(4), offset);
+    const auto high = ir.GetCbuf(ir.Imm32(4), ir.IAdd(offset, ir.Imm32(4)));
+    static_cast<void>(ir.LoadGlobal32(Address(ir, low, high)));
+    CHECK(fixture.TrackedOffsets() == std::vector<u32>{0x10, 0x20});
+    REQUIRE(fixture.program.info.storage_buffers_descriptors.size() == 2);
+    for (const auto& descriptor : fixture.program.info.storage_buffers_descriptors) {
+        CHECK(descriptor.cbuf_index == 4);
+        CHECK_FALSE(descriptor.is_written);
+    }
+    CHECK(fixture.program.info.native_global_bounds);
 }
 
 TEST_CASE("Filter tap offset tables are not taken for the weight pointer",
@@ -297,7 +344,7 @@ TEST_CASE("Loaded global pointers do not inherit the source buffer descriptor",
         ir.WriteGlobal32(Address(ir, add_offset ? IR::U32{ir.IAdd(low, ir.Imm32(16))} : low, high),
                          ir.Imm32(1));
 
-        CHECK(fixture.TrackedOffsets() == std::vector<u32>{0x110});
+        const std::vector<u32> offsets{fixture.TrackedOffsets()};
         const auto has = [&](IR::Opcode opcode) {
             return std::ranges::any_of(fixture.entry.Instructions(), [=](const IR::Inst& inst) {
                 return inst.GetOpcode() == opcode;
@@ -306,8 +353,31 @@ TEST_CASE("Loaded global pointers do not inherit the source buffer descriptor",
         CHECK(has(IR::Opcode::LoadStorage64));
         CHECK(has(IR::Opcode::WriteGlobal32));
         CHECK_FALSE(has(IR::Opcode::WriteStorage32));
-        REQUIRE(fixture.program.info.storage_buffers_descriptors.size() == 1);
-        CHECK_FALSE(fixture.program.info.storage_buffers_descriptors.front().is_written);
+        const auto& descriptors{fixture.program.info.storage_buffers_descriptors};
+        if (!native) {
+            CHECK(offsets == std::vector<u32>{0x110});
+            REQUIRE(descriptors.size() == 1);
+            CHECK_FALSE(descriptors.front().is_written);
+            continue;
+        }
+        // A native program also binds the buffer the loaded pointer points to, as its own
+        // descriptor read through the source: the write stays global and the source unwritten.
+        CHECK(offsets == std::vector<u32>{0x110, 0x110});
+        REQUIRE(descriptors.size() == 2);
+        const auto source_descriptor{std::ranges::find_if(
+            descriptors, [](const auto& desc) { return desc.indirect_offset == ~0U; })};
+        REQUIRE(source_descriptor != descriptors.end());
+        CHECK(source_descriptor->cbuf_index == 0);
+        CHECK(source_descriptor->cbuf_offset == 0x110);
+        CHECK_FALSE(source_descriptor->is_written);
+        CHECK(std::ranges::count_if(descriptors,
+                                    [](const auto& desc) { return desc.is_written; }) == 1);
+        const auto loaded_descriptor{std::ranges::find_if(
+            descriptors, [](const auto& desc) { return desc.is_written; })};
+        REQUIRE(loaded_descriptor != descriptors.end());
+        CHECK(loaded_descriptor->cbuf_index == 0);
+        CHECK(loaded_descriptor->cbuf_offset == 0x110);
+        CHECK(loaded_descriptor->indirect_offset == 0);
     }
 }
 
